@@ -7,7 +7,13 @@
 #include <stdlib.h>
 #define PORT 8080
 
-void *connectionHandler(int *, int *);
+void *connectionHandler(void *);
+
+struct arg_struct {
+	int sock;
+};
+
+int activeConns;
 
 int main() {
 	
@@ -55,68 +61,71 @@ int main() {
 		
 		write(conn_socket , welcomeMessage , strlen(welcomeMessage));
 
-
-
-		pthread_t thread_id; 
-
-		struct arg_struct {
-			int* arg1;
-			int* arg2;
-		};
-
 		struct arg_struct args;
 
-		args.arg1 = malloc(1);
-		args.arg1 = conn_socket;
+		args.sock = conn_socket;
 
-		args.arg2 = activeConns;
-
-		if( pthread_create( &thread_id , NULL ,  connectionHandler , (void *)&args) < 0) {
+		pthread_t thread_id;
+		if( pthread_create( &thread_id , NULL ,  connectionHandler , (void *) &args) < 0) {
 			puts("Could not create thread");
 			return 1;
 		}
 
-		pthread_join( thread_id , NULL);
+		pthread_detach( thread_id );
 
 	}
 
-	return 0;
-
 }
 
-void *connectionHandler(int *conn_sock, int *activeConns) {
-	int sock = *(int*)conn_sock;
+void *connectionHandler(void* arg_ptr) {
+	struct arg_struct* args = arg_ptr;
+	int sock = args->sock;
 
 	activeConns++;
 
-	printf("there are %d connections\n", &activeConns);
-
-	char *message;
-
-	message = "There are x connections\n";
+	char message[250];
+	snprintf(message, 200, "There are %d people connected\nName: ", activeConns);
 	write(sock, message, strlen(message));
 
-	int read_size;
-	char client_message[2000];
+ 	int read_size;
+	char client_message[200];
 
-	while( (read_size = recv(sock , client_message , 2000 , 0)) > 0)
+	char name[20];
+	int nameSet = 0;
+
+	while( (read_size = read(sock , client_message , 200)) > 0)
 	{
 
-		//Send the message back to client
-		write(sock , client_message , strlen(client_message));
+		//Remove last character, which is a newline char.
+		client_message[strlen(client_message)-1] = 0;
+
+		if (nameSet == 0) {
+			if (strlen(client_message) > 20) {
+				strcpy(message, "Name is too long!\nName:");
+				write(sock, message, strlen(message));
+			} else {
+				strcpy(name, client_message);
+				snprintf(message, 200, "Identified as %s\n", name);
+				write(sock, message, strlen(message));
+				nameSet = 1;
+			}
+		} else {
+			//Send the message back to client
+			snprintf(message, 200, "[%s] %s\n", name, client_message);
+			write(sock , message , strlen(message));
+		}
 
 	}
 
 	//Disconnected
 	if (read_size == 0) {
-		puts("Client disconnected");
+		snprintf(message, 200, "User %s disconnected", nameSet ? name : "Unknown" );
+		puts(message);
 	} else {
-		puts("recv failed");
+		puts("read failed");
 	}
 
-	//Free the pointer (caused segmentation fault all of a sudden?)
-	//free(conn_sock);
-
+	activeConns--;
 	return 0;
 
 }
