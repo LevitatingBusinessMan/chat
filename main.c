@@ -5,7 +5,8 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <stdlib.h>
-#define PORT 8080
+//#define PORT 8080
+#define maxConnections 10
 
 void *connectionHandler(void *);
 
@@ -15,8 +16,38 @@ struct arg_struct {
 
 int activeConns;
 
-int main() {
-	
+int lsockets[maxConnections];
+
+int* nextSocketSlot() {
+	int i;
+	for (i=0; i < 10; i++) {
+    	if (lsockets[i] == 0)
+			return &lsockets[i];
+  	}
+	perror("Somehow no space in lsockets array");
+   	exit(EXIT_FAILURE);
+}
+
+void removeSocket(int* sock) {
+	int i;
+	for (i=0; i < 10; i++) {
+    	if (lsockets[i] == *sock)
+			lsockets[i] = 0;
+  	}
+}
+
+int main(int argc, char *argv[]) {
+
+	int port = 7966;
+	int option;
+	while ((option = getopt(argc, argv, "p:")) != -1 )  {  
+        switch(option) {  
+			case 'p':
+				port = atoi(optarg);
+				break;
+        }
+    } 
+
 	int socket_desc;
 	socket_desc = socket(AF_INET , SOCK_STREAM , 0);
 	
@@ -30,14 +61,14 @@ int main() {
 	//Prepare the sockaddr_in structure
 	server.sin_family = AF_INET;
 	server.sin_addr.s_addr = INADDR_ANY;
-	server.sin_port = htons( PORT );
+	server.sin_port = htons(port);
 
 	//Bind and check for errors
 	if ( bind(socket_desc, (struct sockaddr *)&server, sizeof(server)) < 0) {
 		printf("Binding failed\n");
 		return 1;
 	} else {
-		printf("Binded to port %d\n", PORT);
+		printf("Binded to port %d\n", port);
 	}
 
 	
@@ -50,17 +81,19 @@ int main() {
 
 	size_t addr_len = sizeof(server);
 
-	int activeConns = 0;
-	char *welcomeMessage = "Connection established\n";
-
 	int conn_socket;
 	
-	while (conn_socket = accept(socket_desc, (struct sockaddr *)&server, (socklen_t *)&addr_len)) {
+	while ((conn_socket = accept(socket_desc, (struct sockaddr *)&server, (socklen_t *)&addr_len))) {
 		
+		if (maxConnections < activeConns + 1) {
+			puts("Connection denied (maxconns)");
+			char *message = "Room is full!";
+			write(conn_socket , message , strlen(message));
+			return 0;
+		}
+
 		puts("Connection accepted");
 		
-		write(conn_socket , welcomeMessage , strlen(welcomeMessage));
-
 		struct arg_struct args;
 
 		args.sock = conn_socket;
@@ -75,6 +108,17 @@ int main() {
 
 	}
 
+}
+
+//Send message to all (other) sockets in lsockets
+void sendMessageToAll(int* originSock, char* message) {
+	printf(message);
+	int i;
+	for (i=0; i < maxConnections; i++) {
+    	if (lsockets[i] != 0 && lsockets[i] != *originSock) {
+			write(lsockets[i], message, strlen(message));
+		}
+  	}
 }
 
 void *connectionHandler(void* arg_ptr) {
@@ -93,7 +137,7 @@ void *connectionHandler(void* arg_ptr) {
 	char name[20];
 	int nameSet = 0;
 
-	while( (read_size = read(sock , client_message , 200)) > 0)
+	while( (read_size = read(sock , client_message , sizeof(client_message))) > 0)
 	{
 
 		//Remove last character, which is a newline char.
@@ -105,27 +149,39 @@ void *connectionHandler(void* arg_ptr) {
 				write(sock, message, strlen(message));
 			} else {
 				strcpy(name, client_message);
-				snprintf(message, 200, "Identified as %s\n", name);
+				snprintf(message, sizeof(message), "\033[32;1mIdentified as %s\033[0m\n", name);
 				write(sock, message, strlen(message));
+				snprintf(message, sizeof(message), "\033[32;1mUser connected as %s\033[0m\n", name);
+				sendMessageToAll(&sock, message);
 				nameSet = 1;
+				
+				//Register to socket array to receive messages
+				int *slot = nextSocketSlot();
+				*slot = sock;
 			}
 		} else {
-			//Send the message back to client
-			snprintf(message, 200, "[%s] %s\n", name, client_message);
-			write(sock , message , strlen(message));
+			//Send the message to all other clients
+			snprintf(message, sizeof(message), "\033[1m[%s]\033[0m %s\n", name, client_message);
+			sendMessageToAll(&sock, message);
 		}
+
+		//Empty again
+		memset(client_message, 0, sizeof(client_message));
 
 	}
 
 	//Disconnected
 	if (read_size == 0) {
-		snprintf(message, 200, "User %s disconnected", nameSet ? name : "Unknown" );
-		puts(message);
+		snprintf(message, sizeof(message), "\033[91;1mUser %s disconnected\033[0m\n", nameSet ? name : "Unknown" );
+		sendMessageToAll(&sock, message);
 	} else {
-		puts("read failed");
+		puts("Reading client message failed.");
 	}
 
 	activeConns--;
+
+	removeSocket(&sock);
+
 	return 0;
 
 }
