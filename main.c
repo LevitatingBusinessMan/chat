@@ -112,7 +112,7 @@ int main(int argc, char *argv[]) {
 
 //Send message to all (other) sockets in lsockets
 void sendMessageToAll(int* originSock, char* message) {
-	printf(message);
+	printf("%s", message);
 	int i;
 	for (i=0; i < maxConnections; i++) {
     	if (lsockets[i] != 0 && lsockets[i] != *originSock) {
